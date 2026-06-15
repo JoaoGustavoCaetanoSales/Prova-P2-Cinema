@@ -1,6 +1,7 @@
 package com.example.provap2cinema.ui.screens
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -12,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,37 +37,60 @@ fun AddMovieScreen(
     movieId: String? = null,
     onNavigateBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var duration by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf("") }
     var rating by remember { mutableStateOf("") }
+    var posterUrl by remember { mutableStateOf("") }
+    
+    // imageUri guarda o preview local enquanto a conversão acontece
     var imageUri by remember { mutableStateOf<Uri?>(null) }
-    var existingPosterUrl by remember { mutableStateOf("") }
-    var isUploading by remember { mutableStateOf(false) }
+    var isUploadingImage by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
 
     val isEditMode = movieId != null
 
-    LaunchedEffect(movieId) {
+    // Carregar dados iniciais ao editar (reage a mudanças no estado do ViewModel)
+    LaunchedEffect(movieId, viewModel.movieState) {
         if (isEditMode) {
             val state = viewModel.movieState
             if (state is MovieState.Success) {
                 state.movies.find { it.id == movieId }?.let { movie ->
-                    title = movie.title
-                    description = movie.description
-                    duration = movie.duration
-                    genre = movie.genre
-                    rating = movie.rating
-                    existingPosterUrl = movie.posterUrl
+                    // Preenche apenas se os campos estiverem vazios para não sobrescrever edições manuais
+                    if (title.isEmpty()) title = movie.title
+                    if (description.isEmpty()) description = movie.description
+                    if (duration.isEmpty()) duration = movie.duration
+                    if (genre.isEmpty()) genre = movie.genre
+                    if (rating.isEmpty()) rating = movie.rating
+                    if (posterUrl.isEmpty()) posterUrl = movie.posterUrl
                 }
             }
         }
     }
 
+    // Seletor de galeria que já inicia o processamento Base64
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        imageUri = uri
+        uri?.let {
+            imageUri = it // Preview imediato
+            isUploadingImage = true
+            viewModel.processImageToBase64(
+                context = context,
+                uri = it,
+                onResult = { base64String ->
+                    posterUrl = base64String // Preenche o campo da URL
+                    isUploadingImage = false
+                    Toast.makeText(context, "Imagem convertida em URL!", Toast.LENGTH_SHORT).show()
+                },
+                onError = { error ->
+                    isUploadingImage = false
+                    Toast.makeText(context, "Erro ao converter: $error", Toast.LENGTH_LONG).show()
+                }
+            )
+        }
     }
 
     Scaffold(
@@ -111,31 +136,43 @@ fun AddMovieScreen(
                     .height(280.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .clickable(
-                        onClickLabel = "Selecionar poster da galeria",
-                        onClick = { galleryLauncher.launch("image/*") }
-                    ),
+                    .clickable { galleryLauncher.launch("image/*") },
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUri != null || existingPosterUrl.isNotEmpty()) {
+                // Se o Base64 estiver pronto, usa ele. Se não, usa a URI da galeria.
+                val displaySource = if (posterUrl.isNotEmpty()) posterUrl else imageUri
+                
+                if (displaySource != null) {
                     AsyncImage(
-                        model = imageUri ?: existingPosterUrl,
+                        model = displaySource,
                         contentDescription = "Poster selecionado",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.3f)),
-                        contentAlignment = Alignment.BottomEnd
-                    ) {
-                        Icon(
-                            Icons.Default.AddAPhoto,
-                            contentDescription = "Alterar poster",
-                            modifier = Modifier.padding(16.dp),
-                            tint = Color.White
-                        )
+                    
+                    if (isUploadingImage) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.5f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = Color.White)
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.3f)),
+                            contentAlignment = Alignment.BottomEnd
+                        ) {
+                            Icon(
+                                Icons.Default.AddAPhoto,
+                                contentDescription = "Alterar poster",
+                                modifier = Modifier.padding(16.dp),
+                                tint = Color.White
+                            )
+                        }
                     }
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -154,6 +191,18 @@ fun AddMovieScreen(
                     }
                 }
             }
+
+            // O campo da URL será preenchido automaticamente com o texto Base64 gerado
+            OutlinedTextField(
+                value = posterUrl,
+                onValueChange = { posterUrl = it },
+                label = { Text("URL do Poster") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) },
+                placeholder = { Text("A URL (Base64) aparecerá aqui...") },
+                supportingText = { Text("A imagem é convertida em texto automaticamente") }
+            )
 
             Text(
                 "Informações Gerais",
@@ -208,7 +257,7 @@ fun AddMovieScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (isUploading) {
+            if (isSaving) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                     color = MaterialTheme.colorScheme.primary
@@ -216,43 +265,34 @@ fun AddMovieScreen(
             } else {
                 Button(
                     onClick = {
-                        isUploading = true
-                        val saveMovie = { url: String ->
-                            val movie = Movie(
-                                id = movieId ?: "",
-                                title = title,
-                                description = description,
-                                duration = duration,
-                                genre = genre,
-                                rating = rating,
-                                posterUrl = url
-                            )
-                            if (isEditMode) {
-                                viewModel.updateMovie(movie) {
-                                    isUploading = false
-                                    onNavigateBack()
-                                }
-                            } else {
-                                viewModel.addMovie(movie) {
-                                    isUploading = false
-                                    onNavigateBack()
-                                }
-                            }
-                        }
-
-                        if (imageUri != null) {
-                            viewModel.uploadMovieImage(imageUri!!) { downloadUrl ->
-                                saveMovie(downloadUrl)
+                        isSaving = true
+                        val movie = Movie(
+                            id = movieId ?: "",
+                            title = title,
+                            description = description,
+                            duration = duration,
+                            genre = genre,
+                            rating = rating,
+                            posterUrl = posterUrl
+                        )
+                        
+                        if (isEditMode) {
+                            viewModel.updateMovie(movie) {
+                                isSaving = false
+                                onNavigateBack()
                             }
                         } else {
-                            saveMovie(existingPosterUrl)
+                            viewModel.addMovie(movie) {
+                                isSaving = false
+                                onNavigateBack()
+                            }
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
                     shape = RoundedCornerShape(12.dp),
-                    enabled = title.isNotBlank() && description.isNotBlank(),
+                    enabled = title.isNotBlank() && description.isNotBlank() && posterUrl.isNotBlank() && !isUploadingImage,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
                     Text(
